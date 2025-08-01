@@ -1,0 +1,35 @@
+{
+  "enabled_analyzers": [
+    "hive_orchestration",
+    "mcp_orchestration", 
+    "swarm",
+    "development", 
+    "github",
+    "testing",
+    "performance"
+  ],
+  "quick_tips": {
+    "enabled": true,
+    "message": "\n👑 HIVE LAW - QUEEN ZEN'S ROYAL DECREES:\n• 🐝 ALWAYS start with Queen ZEN's commands (mcp__zen__chat/thinkdeep/planner)\n• 👑 HIVE HIERARCHY: Queen ZEN → Flow Workers → Storage Workers → Execution Drones\n• ⚡ BATCH all MCP hive operations in single royal messages\n• 🚨 NEVER bypass Queen ZEN - hive chaos follows disobedience!"
+  },
+  "deduplication": true,
+  "custom_pattern_priority": 75,
+  "custom_patterns": [
+    {
+      "pattern": "(machine learning|ml|ai|neural|deep learning)",
+      "message": "🤖 MACHINE LEARNING DETECTED\n• Deploy ml-developer agent for ML tasks\n• Consider performance-benchmarker for model evaluation\n• Use memory-coordinator for experiment tracking",
+      "metadata": {
+        "category": "ml",
+        "suggested_agents": ["ml-developer", "performance-benchmarker", "memory-coordinator"]
+      }
+    },
+    {
+      "pattern": "(security|auth|authentication|authorization|crypto)",
+      "message": "🔒 SECURITY FOCUS DETECTED\n• Use security-manager for cryptographic protocols\n• Deploy byzantine-coordinator for secure consensus\n• Consider code-analyzer for vulnerability scanning",
+      "metadata": {
+        "category": "security",
+        "suggested_agents": ["security-manager", "byzantine-coordinator", "code-analyzer"]
+      }
+    }
+  ]
+}

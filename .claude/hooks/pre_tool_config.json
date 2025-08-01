@@ -1,0 +1,38 @@
+{
+  "enabled_validators": [
+    "zen_hierarchy_validator",
+    "mcp_coordination_validator",
+    "hive_workflow_optimizer", 
+    "efficiency_optimizer",
+    "safety_validator"
+  ],
+  "validation_settings": {
+    "block_dangerous_operations": true,
+    "suggest_optimizations": true,
+    "require_zen_for_complex": true,
+    "optimization_threshold": 30
+  },
+  "hive_intelligence": {
+    "auto_suggest_coordination": true,
+    "pattern_detection_enabled": true,
+    "workflow_optimization": true,
+    "memory_integration": true
+  },
+  "blocking_behavior": {
+    "block_on_critical": true,
+    "block_on_dangerous": true,
+    "allow_overrides": false
+  },
+  "coordination_thresholds": {
+    "zen_guidance_window": 3,
+    "flow_coordination_window": 2,
+    "complex_operation_threshold": 5
+  },
+  "optimization_priorities": {
+    "queen_zen_supreme": 1000,
+    "safety_critical": 950,
+    "mcp_coordination": 900,
+    "workflow_intelligence": 750,
+    "efficiency_optimization": 600
+  }
+}

@@ -5,33 +5,7 @@
     "CLAUDE_FLOW_HOOKS_ENABLED": "true",
     "CLAUDE_FLOW_TELEMETRY_ENABLED": "true",
     "CLAUDE_FLOW_REMOTE_EXECUTION": "true",
-    "CLAUDE_FLOW_CHECKPOINTS_ENABLED": "true",
-    "GRAPHITI_GROUP_ID": "claude-code-flowed"
-  },
-  "mcpServers": {
-    "graphiti-memory": {
-      "transport": "stdio",
-      "command": "/home/blake/.local/bin/uv",
-      "args": [
-        "run",
-        "--directory",
-        "/home/blake/flowed/graphiti/mcp_server",
-        "graphiti_mcp_server.py",
-        "--transport",
-        "stdio",
-        "--group-id",
-        "claude-code-flowed",
-        "--use-custom-entities"
-      ],
-      "env": {
-        "NEO4J_URI": "bolt://localhost:7687",
-        "NEO4J_USER": "neo4j",
-        "NEO4J_PASSWORD": "password",
-        "OPENAI_API_KEY": "your-openai-key-here",
-        "MODEL_NAME": "gpt-4-turbo-preview",
-        "SMALL_MODEL_NAME": "gpt-3.5-turbo"
-      }
-    }
+    "CLAUDE_FLOW_CHECKPOINTS_ENABLED": "true"
   },
   "permissions": {
     "allow": [
@@ -64,17 +38,35 @@
     ]
   },
   "hooks": {
-    "SessionStart": [
+    "PreToolUse": [],
+    "PostToolUse": [
       {
-        "matchers": ["startup", "resume", "clear"],
+        "matcher": "Bash|Write|Edit|MultiEdit",
         "hooks": [
           {
             "type": "command",
-            "command": "/home/blake/flowed/.claude/hooks/session-start-zen.py"
-          },
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/post_tool_use.py"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "*",
+        "hooks": [
           {
             "type": "command",
-            "command": "/home/blake/flowed/.claude/hooks/session-start-memory.py"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/pre_compact.py"
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/session_start.py"
           }
         ]
       }
@@ -84,84 +76,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/home/blake/flowed/.claude/hooks/prompt-submit-zen.py"
-          },
-          {
-            "type": "command",
-            "command": "/home/blake/flowed/.claude/hooks/zen-memory-wrapper.py"
-          },
-          {
-            "type": "command",
-            "command": "/home/blake/flowed/.claude/hooks/graphiti-integration.py"
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cat | jq -r '.tool_input.command // empty' | tr '\\n' '\\0' | xargs -0 -I {} npx claude-flow@alpha hooks pre-command --command '{}' --validate-safety true --prepare-resources true"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cat | jq -r '.tool_input.file_path // .tool_input.path // empty' | tr '\\n' '\\0' | xargs -0 -I {} npx claude-flow@alpha hooks pre-edit --file '{}' --auto-assign-agents true --load-context true"
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cat | jq -r '.tool_input.command // empty' | tr '\\n' '\\0' | xargs -0 -I {} npx claude-flow@alpha hooks post-command --command '{}' --track-metrics true --store-results true"
-          }
-        ]
-      },
-      {
-        "matcher": "Write|Edit|MultiEdit",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "cat | jq -r '.tool_input.file_path // .tool_input.path // empty' | tr '\\n' '\\0' | xargs -0 -I {} npx claude-flow@alpha hooks post-edit --file '{}' --format true --update-memory true"
-          }
-        ]
-      },
-      {
-        "matcher": "mcp__zen__.*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/home/blake/flowed/.claude/hooks/zen-graphiti-bridge.py"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "manual",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/bin/bash -c 'INPUT=$(cat); CUSTOM=$(echo \"$INPUT\" | jq -r \".custom_instructions // \\\"\\\"\"); echo \"🔄 PreCompact Guidance:\"; echo \"📋 IMPORTANT: Review CLAUDE.md in project root for:\"; echo \"   • 54 available agents and concurrent usage patterns\"; echo \"   • Swarm coordination strategies (hierarchical, mesh, adaptive)\"; echo \"   • SPARC methodology workflows with batchtools optimization\"; echo \"   • Critical concurrent execution rules (GOLDEN RULE: 1 MESSAGE = ALL OPERATIONS)\"; if [ -n \"$CUSTOM\" ]; then echo \"🎯 Custom compact instructions: $CUSTOM\"; fi; echo \"✅ Ready for compact operation\"'"
-          }
-        ]
-      },
-      {
-        "matcher": "auto",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "/bin/bash -c 'echo \"🔄 Auto-Compact Guidance (Context Window Full):\"; echo \"📋 CRITICAL: Before compacting, ensure you understand:\"; echo \"   • All 54 agents available in .claude/agents/ directory\"; echo \"   • Concurrent execution patterns from CLAUDE.md\"; echo \"   • Batchtools optimization for 300% performance gains\"; echo \"   • Swarm coordination strategies for complex tasks\"; echo \"⚡ Apply GOLDEN RULE: Always batch operations in single messages\"; echo \"✅ Auto-compact proceeding with full agent context\"'"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/user_prompt_submit.py"
           }
         ]
       }
@@ -171,7 +86,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "npx claude-flow@alpha hooks session-end --generate-summary true --persist-state true --export-metrics true"
+            "command": "$CLAUDE_PROJECT_DIR/.claude/hooks/stop.py"
           }
         ]
       }

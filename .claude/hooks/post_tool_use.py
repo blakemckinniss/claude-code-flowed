@@ -1,0 +1,858 @@
+#!/usr/bin/env python3
+"""Optimized PostToolUse hook handler with performance enhancements.
+
+Integrates optimization modules for high-performance post-execution processing:
+- Asynchronous metric recording
+- Smart caching for pattern detection
+- Parallel analysis of tool outputs
+- Circuit breaker for resilience
+- Memory-efficient pattern storage
+"""
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+import threading
+import time
+from datetime import datetime
+from typing import Any, Callable, Dict, List, Optional, cast, Protocol, runtime_checkable
+
+# Set up hook paths using centralized path resolver
+from modules.utils.path_resolver import setup_hook_paths
+setup_hook_paths()
+
+# Now we can import cleanly without explicit sys.path.insert calls
+from modules.utils.process_manager import managed_subprocess_run
+
+# Import optimization modules
+try:
+    from modules.optimization import (
+        AsyncDatabaseManager,
+        BoundedPatternStorage,
+        ContextTracker,
+        HookCircuitBreaker,
+        HookExecutionPool,
+        HookPipeline,
+        ParallelValidationManager,
+        PerformanceMetricsCache,
+        ValidatorCache,
+    )
+    # Narrow exported types to runtime Protocols for consistent typing across imports
+    from modules.optimization.async_db import AsyncDatabaseManager as _AsyncDBManagerImpl
+    OPTIMIZATION_AVAILABLE = True
+except ImportError as e:
+    # Fallback: import directly from submodules to avoid unbound names
+    try:
+        from modules.optimization.cache import (
+            PerformanceMetricsCache as _PerformanceMetricsCache,
+        )
+        from modules.optimization.cache import (
+            ValidatorCache as _ValidatorCache,
+        )
+        from modules.optimization.memory_pool import (
+            BoundedPatternStorage as _BoundedPatternStorage,
+        )
+        from modules.optimization.memory_pool import (
+            ContextTracker as _ContextTracker,
+        )
+        OPTIMIZATION_AVAILABLE = True
+        # Alias to expected names for the rest of this module
+        ValidatorCache = _ValidatorCache
+        PerformanceMetricsCache = _PerformanceMetricsCache
+        BoundedPatternStorage = _BoundedPatternStorage
+        ContextTracker = _ContextTracker
+        # Import Async DB impl when top-level import failed
+        try:
+            from modules.optimization.async_db import AsyncDatabaseManager as _AsyncDBManagerImpl  # type: ignore
+        except Exception:
+            _AsyncDBManagerImpl = None  # type: ignore[assignment]
+
+        # Best-effort fallbacks for optional components; mark as unavailable if missing
+        try:
+            from modules.optimization.hook_pool import (
+                HookExecutionPool as _HookExecutionPool,
+            )
+            HookExecutionPool = _HookExecutionPool  # type: ignore[assignment]
+        except Exception:
+            HookExecutionPool = None  # type: ignore[assignment]
+
+        try:
+            from modules.optimization import (
+                HookCircuitBreaker as _HookCircuitBreaker,  # type: ignore[attr-defined]
+            )
+            HookCircuitBreaker = _HookCircuitBreaker  # type: ignore[assignment]
+        except Exception:
+            # Minimal no-op circuit breaker fallback
+            class _NoopCircuitBreaker:
+                def call(self, func, fallback):
+                    try:
+                        return func()
+                    except Exception:
+                        return fallback()
+            HookCircuitBreaker = _NoopCircuitBreaker  # type: ignore[assignment]
+
+        try:
+            from modules.optimization import (
+                HookPipeline as _HookPipeline,  # type: ignore[attr-defined]
+            )
+            HookPipeline = _HookPipeline  # type: ignore[assignment]
+        except Exception:
+            # Minimal pipeline fallback with a compatible add_stage(name, fn, **kwargs) signature
+            class _FallbackPipeline:
+                def __init__(self, max_workers: int = 1):
+                    self._stages = []
+                def add_stage(self, *args, **kwargs):
+                    # Support either add_stage(fn) or add_stage(name, fn, **kwargs)
+                    if args and callable(args[0]):
+                        self._stages.append(("stage", args[0]))
+                    elif len(args) >= 2 and callable(args[1]):
+                        self._stages.append((str(args[0]), args[1]))
+                    else:
+                        raise TypeError("add_stage requires a handler function")
+                def process(self, data, context=None):
+                    for _, fn in self._stages:
+                        data = fn(data, context)
+                    return data
+            HookPipeline = _FallbackPipeline  # type: ignore[assignment]
+
+        try:
+            from modules.optimization import (
+                ParallelValidationManager as _ParallelValidationManager,  # type: ignore[attr-defined]
+            )
+            ParallelValidationManager = _ParallelValidationManager  # type: ignore[assignment]
+        except Exception:
+            class _FallbackParallelValidationManager:
+                def __init__(self, max_workers: int = 1):
+                    self.max_workers = max_workers
+                def validate_parallel(self, pattern, analyzers, validators=None):
+                    # Sequential fallback; ignore validators if provided
+                    return {name: fn(pattern) for name, fn in analyzers}
+                def shutdown(self):
+                    pass
+            ParallelValidationManager = _FallbackParallelValidationManager  # type: ignore[assignment]
+
+        print(f"Warning: Fallback imports used for optimization modules due to: {e}", file=sys.stderr)
+    except Exception as inner_e:
+        print(f"Warning: Optimization modules not available: {e} | Fallback import failed: {inner_e}", file=sys.stderr)
+        OPTIMIZATION_AVAILABLE = False
+
+# Import existing analysis modules
+try:
+    from modules.post_tool.core import GuidanceOutputHandler
+    from modules.post_tool.manager import DebugAnalysisReporter, PostToolAnalysisManager
+    MODULES_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: Post-tool modules not available: {e}", file=sys.stderr)
+    MODULES_AVAILABLE = False
+
+
+# Define minimal runtime protocols to placate strict type checkers while keeping loose runtime coupling
+
+@runtime_checkable
+class AsyncDBProtocol(Protocol):
+    def queue_write(self, sql: str, params: Optional[tuple] = ...) -> None: ...
+    def queue_many(self, sql: str, params_list: List[tuple]) -> None: ...
+    def queue_script(self, sql_script: str) -> None: ...
+    def shutdown(self) -> None: ...
+    def get_queue_size(self) -> int: ...
+
+@runtime_checkable
+class ContextTrackerProtocol(Protocol):
+    def add_event(self, event: Dict[str, Any]) -> None: ...
+    def get_recent_events(self, n: int) -> List[Dict[str, Any]]: ...
+
+@runtime_checkable
+class CircuitBreakerProtocol(Protocol):
+    def call(self, func: Callable[[], Any], fallback: Callable[[], Any]) -> Any: ...
+
+@runtime_checkable
+class ParallelValidatorProtocol(Protocol):
+    def validate_parallel(self, pattern: Dict[str, Any], analyzers: List[tuple]) -> Dict[str, Any]: ...
+
+# Global instances for persistent optimization (typed via Protocols where applicable)
+_metrics_cache: Optional[PerformanceMetricsCache] = None  # type: ignore[valid-type]
+_async_db: Optional[AsyncDBProtocol] = None
+_pattern_storage: Optional[BoundedPatternStorage] = None  # type: ignore[valid-type]
+_context_tracker: Optional[ContextTrackerProtocol] = None
+_circuit_breaker: Optional[CircuitBreakerProtocol] = None
+_pipeline = None
+_parallel_analyzer: Optional[ParallelValidatorProtocol] = None
+
+
+def initialize_optimization_infrastructure():
+    """Initialize optimization components for post-tool processing."""
+    global _metrics_cache, _async_db, _pattern_storage
+    global _context_tracker, _circuit_breaker, _pipeline, _parallel_analyzer
+
+    if not OPTIMIZATION_AVAILABLE:
+        return
+
+    try:
+        # Initialize performance metrics cache
+        _metrics_cache = PerformanceMetricsCache(
+            write_interval=5.0,
+            batch_size=100
+        )
+
+        # Initialize async database for tool usage history
+        # Use the canonical AsyncDatabaseManager from modules.optimization.async_db
+        try:
+            # Prefer canonical implementation for instantiation
+            if '_AsyncDBManagerImpl' in globals() and _AsyncDBManagerImpl is not None:  # type: ignore[name-defined]
+                _async_db_candidate = _AsyncDBManagerImpl(  # type: ignore[operator]
+                    db_path=Path("/home/devcontainers/flowed/.claude/hooks/db/tool_history.db"),
+                    batch_size=50,
+                    batch_timeout=10.0
+                )
+            else:
+                _async_db_candidate = AsyncDatabaseManager(  # type: ignore[call-arg]
+                    db_path=Path("/home/devcontainers/flowed/.claude/hooks/db/tool_history.db"),
+                    batch_size=50,
+                    batch_timeout=10.0
+                )
+            # Ensure it matches our protocol at runtime
+            if isinstance(_async_db_candidate, AsyncDBProtocol) or hasattr(_async_db_candidate, "queue_write"):
+                _async_db = cast("AsyncDBProtocol", _async_db_candidate)
+            else:
+                _async_db = None
+        except Exception:
+            _async_db = None
+
+        # Initialize pattern storage for drift detection
+        _pattern_storage = BoundedPatternStorage(max_patterns=1000)
+
+        # Initialize context tracker for session analysis (guard for protocol)
+        try:
+            _ctx_candidate = ContextTracker()
+            _context_tracker = cast("ContextTrackerProtocol", _ctx_candidate) if hasattr(_ctx_candidate, "add_event") else None
+        except Exception:
+            _context_tracker = None
+
+        # Initialize circuit breaker for resilient processing (use permissive construction)
+        try:
+            _circuit_breaker = HookCircuitBreaker()  # type: ignore[call-arg]
+        except Exception:
+            _circuit_breaker = HookCircuitBreaker  # type: ignore[assignment]
+
+        # Initialize parallel analyzer (wrap to protocol)
+        try:
+            _par_impl = ParallelValidationManager(max_workers=3)  # type: ignore[call-arg]
+        except Exception:
+            _par_impl = None  # type: ignore[assignment]
+
+        class _ParallelAdapter:
+            def __init__(self, impl: Any):
+                self._impl = impl
+            def validate_parallel(self, pattern: Dict[str, Any], analyzers: List[tuple]) -> Dict[str, Any]:
+                try:
+                    return self._impl.validate_parallel(pattern, analyzers)  # type: ignore[call-arg]
+                except Exception:
+                    return {name: fn(pattern) for name, fn in analyzers}
+
+        _parallel_analyzer = cast("ParallelValidatorProtocol", _ParallelAdapter(_par_impl)) if _par_impl is not None else None
+
+        # Initialize processing pipeline
+        _pipeline = create_optimized_processing_pipeline()
+
+        print("⚡ Post-tool optimization infrastructure initialized", file=sys.stderr)
+
+    except Exception as e:
+        print(f"Warning: Failed to initialize optimization: {e}", file=sys.stderr)
+
+
+def create_optimized_processing_pipeline() -> Optional[Any]:
+    """Create an optimized post-tool processing pipeline."""
+    if not OPTIMIZATION_AVAILABLE:
+        return None
+
+    pipeline = HookPipeline(max_workers=4)  # type: ignore[call-arg]
+
+    # Stage 1: Async metric recording
+    def record_metrics(data, context):
+        tool_name = data.get("tool_name", "")
+        tool_response = data.get("tool_response", {})
+        success = tool_response.get("success", True)
+
+        # Record to async database via queue_write for portability
+        if _async_db and hasattr(_async_db, "queue_write"):
+            try:
+                _async_db.queue_write(  # type: ignore[attr-defined]
+                    "INSERT INTO tool_history (timestamp, tool, success, duration, input_size, output_size) VALUES (?, ?, ?, ?, ?, ?)",
+                    (
+                        datetime.now().isoformat(),
+                        tool_name,
+                        int(bool(success)),
+                        float(tool_response.get("duration", 0)),
+                        len(json.dumps(data.get("tool_input", {}))),
+                        len(json.dumps(tool_response)),
+                    ),
+                )
+            except Exception:
+                # Best-effort: ignore DB queue errors
+                pass
+
+        # Update performance metrics
+        if _metrics_cache:
+            _metrics_cache.record_metric({
+                "operation_type": f"tool_{tool_name}",
+                "success": success,
+                "timestamp": time.time()
+            })
+
+        return data
+
+    # Stage 2: Pattern detection and learning
+    def detect_patterns(data, context):
+        tool_name = data.get("tool_name", "")
+        tool_input = data.get("tool_input", {})
+        tool_response = data.get("tool_response", {})
+
+        # Update context tracker
+        if _context_tracker and hasattr(_context_tracker, "add_event"):
+            try:
+                _context_tracker.add_event({  # type: ignore[attr-defined]
+                    "tool": tool_name,
+                    "timestamp": time.time(),
+                    "input": tool_input,
+                    "success": tool_response.get("success", True)
+                })
+            except Exception:
+                pass
+
+            # Check for workflow patterns
+            try:
+                recent_events = _context_tracker.get_recent_events(10) if hasattr(_context_tracker, "get_recent_events") else []  # type: ignore[attr-defined]
+            except Exception:
+                recent_events = []
+            data["workflow_pattern"] = analyze_workflow_pattern(recent_events)
+
+        # Store successful patterns
+        if _pattern_storage and tool_response.get("success", True):
+            pattern_key = f"{tool_name}:{hash(json.dumps(tool_input, sort_keys=True))}"
+            _pattern_storage.add_pattern(pattern_key, {
+                "tool": tool_name,
+                "type": detect_tool_pattern_type(tool_name, tool_input),
+                "timestamp": time.time()
+            })
+
+        return data
+
+    # Stage 3: Parallel drift analysis
+    def analyze_drift(data, context):
+        if not data.get("workflow_pattern"):
+            return data
+
+        pattern = data["workflow_pattern"]
+
+        # Define analyzers
+        analyzers = [
+            ("sequential_drift", detect_sequential_drift),
+            ("coordination_drift", detect_coordination_drift),
+            ("resource_drift", detect_resource_drift)
+        ]
+
+        # Run analyzers in parallel
+        if _parallel_analyzer:
+            try:
+                results = _parallel_analyzer.validate_parallel(pattern, analyzers)  # type: ignore[arg-type]
+                data["drift_analysis"] = results
+            except Exception:
+                data["drift_analysis"] = {}
+
+        return data
+
+    # Stage 4: Circuit breaker for guidance generation
+    def generate_guidance(data, context):
+        drift_analysis = data.get("drift_analysis", {})
+
+        def guidance_func():
+            # Check if significant drift detected
+            for drift_type, result in drift_analysis.items():
+                if result.get("drift_detected"):
+                    return {
+                        "needs_guidance": True,
+                        "drift_type": drift_type,
+                        "severity": result.get("severity", "medium")
+                    }
+            return {"needs_guidance": False}
+
+        def fallback_func():
+            # Fallback to basic analysis
+            return {"needs_guidance": False}
+
+        if _circuit_breaker:
+            # Support different circuit breaker interfaces gracefully
+            call_fn = getattr(_circuit_breaker, "call", None) or getattr(_circuit_breaker, "execute", None)
+            if callable(call_fn):
+                guidance = call_fn(guidance_func, fallback_func)
+            else:
+                try:
+                    guidance = guidance_func()
+                except Exception:
+                    guidance = fallback_func()
+            data["guidance"] = guidance
+
+        return data
+
+    # Add stages to pipeline; support both rich and minimal add_stage signatures
+    try:
+        pipeline.add_stage("metrics", record_metrics, parallel=True, timeout=2.0)
+        pipeline.add_stage("patterns", detect_patterns, timeout=3.0)
+        pipeline.add_stage("drift", analyze_drift, parallel=True, timeout=5.0)
+        pipeline.add_stage("guidance", generate_guidance, timeout=2.0)
+    except TypeError:
+        pipeline.add_stage(record_metrics)    # type: ignore[arg-type]
+        pipeline.add_stage(detect_patterns)   # type: ignore[arg-type]
+        pipeline.add_stage(analyze_drift)     # type: ignore[arg-type]
+        pipeline.add_stage(generate_guidance) # type: ignore[arg-type]
+
+    return pipeline
+
+
+def analyze_workflow_pattern(events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Analyze recent events for workflow patterns."""
+    if not events:
+        return {}
+
+    # Extract tool sequence
+    tool_sequence = [e.get("tool", "") for e in events]
+
+    # Check for common patterns
+    pattern = {
+        "sequence": tool_sequence,
+        "length": len(tool_sequence),
+        "unique_tools": len(set(tool_sequence)),
+        "has_mcp_coordination": any("mcp__" in tool for tool in tool_sequence),
+        "has_task_agent": "Task" in tool_sequence,
+        "has_file_ops": any(tool in ["Write", "Edit", "Read"] for tool in tool_sequence)
+    }
+
+    return pattern
+
+
+def detect_tool_pattern_type(tool_name: str, tool_input: Dict[str, Any]) -> str:
+    """Detect the type of tool usage pattern."""
+    if tool_name == "Bash":
+        command = tool_input.get("command", "")
+        if "npm" in command or "npx" in command:
+            return "package_management"
+        if "git" in command:
+            return "version_control"
+        if "mkdir" in command or "cp" in command or "mv" in command:
+            return "file_system"
+        return "general_command"
+
+    if tool_name in ["Write", "Edit", "MultiEdit"]:
+        file_path = tool_input.get("file_path") or tool_input.get("path", "")
+        if ".py" in file_path:
+            return "python_edit"
+        if ".js" in file_path or ".ts" in file_path:
+            return "javascript_edit"
+        if ".json" in file_path:
+            return "config_edit"
+        return "general_edit"
+
+    if tool_name == "Task":
+        return "agent_spawn"
+
+    if "mcp__" in tool_name:
+        return "mcp_coordination"
+
+    return "other"
+
+
+def detect_sequential_drift(pattern: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect sequential execution instead of parallel."""
+    sequence = pattern.get("sequence", [])
+
+    # Check for repeated similar operations that could be batched
+    consecutive_same = 0
+    max_consecutive = 0
+    prev_tool = None
+
+    for tool in sequence:
+        if tool == prev_tool:
+            consecutive_same += 1
+            max_consecutive = max(max_consecutive, consecutive_same)
+        else:
+            consecutive_same = 0
+        prev_tool = tool
+
+    drift_detected = max_consecutive >= 3
+
+    return {
+        "drift_detected": drift_detected,
+        "severity": "high" if max_consecutive >= 5 else "medium",
+        "consecutive_operations": max_consecutive
+    }
+
+
+def detect_coordination_drift(pattern: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect lack of MCP coordination."""
+    has_mcp = pattern.get("has_mcp_coordination", False)
+    has_tasks = pattern.get("has_task_agent", False)
+    has_file_ops = pattern.get("has_file_ops", False)
+
+    # Complex operation without coordination
+    drift_detected = (has_tasks or has_file_ops) and not has_mcp
+
+    return {
+        "drift_detected": drift_detected,
+        "severity": "medium",
+        "missing_coordination": True
+    }
+
+
+def detect_resource_drift(pattern: Dict[str, Any]) -> Dict[str, Any]:
+    """Detect resource-intensive patterns."""
+    sequence = pattern.get("sequence", [])
+
+    # Count resource-intensive operations
+    resource_ops = sum(1 for tool in sequence if tool in ["Bash", "Task", "WebSearch"])
+
+    drift_detected = resource_ops >= 5
+
+    return {
+        "drift_detected": drift_detected,
+        "severity": "low",
+        "resource_operations": resource_ops
+    }
+
+
+def check_python_files_with_ruff(tool_name: str, tool_input: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Check Python files with Ruff for code quality issues."""
+    # Only check file operations on Python files
+    if tool_name not in ["Write", "Edit", "MultiEdit"]:
+        return None
+
+    # Extract file path
+    file_path = tool_input.get("file_path") or tool_input.get("path", "")
+    if not file_path or not file_path.endswith(".py"):
+        return None
+
+    # Convert to absolute path for proper checking
+    if not os.path.isabs(file_path):
+        file_path = os.path.join("/home/devcontainers/flowed", file_path)
+
+    if not os.path.exists(file_path):
+        return None
+
+    try:
+        # Run Ruff check with timeout (managed)
+        result = managed_subprocess_run(
+            ["ruff", "check", file_path, "--output-format=json"],
+            check=False, capture_output=True,
+            text=True,
+            timeout=10,
+            max_memory_mb=50,  # 50MB memory limit
+            cwd="/home/devcontainers/flowed",
+            tags={"hook": "post-tool", "type": "ruff-check"}
+        )
+
+        # Parse results
+        if result.stdout:
+            try:
+                issues = json.loads(result.stdout)
+                if issues:
+                    return {
+                        "has_issues": True,
+                        "file_path": file_path,
+                        "issues": issues,
+                        "total_issues": len(issues)
+                    }
+            except json.JSONDecodeError:
+                pass
+
+        return {"has_issues": False, "file_path": file_path}
+
+    except (subprocess.TimeoutExpired, subprocess.CalledProcessError, FileNotFoundError):
+        # Ruff not available or failed - don't block execution
+        return None
+
+
+def format_ruff_feedback(ruff_result: Dict[str, Any]) -> str:
+    """Format Ruff results for Claude Code feedback."""
+    if not ruff_result.get("has_issues"):
+        return ""
+
+    file_path = ruff_result.get("file_path", "")
+    issues = ruff_result.get("issues", [])
+    total_issues = ruff_result.get("total_issues", 0)
+
+    # Group issues by severity
+    errors = [i for i in issues if i.get("type") == "E" or i.get("code", "").startswith("E")]
+    warnings = [i for i in issues if i.get("type") == "W" or i.get("code", "").startswith("W")]
+    style_issues = [i for i in issues if i.get("code", "").startswith(("F", "N", "D", "UP"))]
+    security_issues = [i for i in issues if i.get("code", "").startswith("S")]
+
+    feedback_lines = [
+        f"\n{'='*70}",
+        "🔧 RUFF CODE QUALITY FEEDBACK",
+        f"File: {os.path.relpath(file_path, '/home/devcontainers/flowed')}",
+        f"Total Issues: {total_issues}",
+        f"{'='*70}"
+    ]
+
+    # Show most critical issues first
+    if security_issues:
+        feedback_lines.append(f"\n🚨 SECURITY ISSUES ({len(security_issues)}):")
+        for issue in security_issues[:3]:  # Show top 3
+            line = issue.get("location", {}).get("row", "?")
+            code = issue.get("code", "")
+            message = issue.get("message", "")
+            feedback_lines.append(f"  Line {line}: [{code}] {message}")
+        if len(security_issues) > 3:
+            feedback_lines.append(f"  ... and {len(security_issues) - 3} more security issues")
+
+    if errors:
+        feedback_lines.append(f"\n❌ ERRORS ({len(errors)}):")
+        for error in errors[:3]:  # Show top 3
+            line = error.get("location", {}).get("row", "?")
+            code = error.get("code", "")
+            message = error.get("message", "")
+            feedback_lines.append(f"  Line {line}: [{code}] {message}")
+        if len(errors) > 3:
+            feedback_lines.append(f"  ... and {len(errors) - 3} more errors")
+
+    if style_issues:
+        feedback_lines.append(f"\n💡 STYLE & BEST PRACTICES ({len(style_issues)}):")
+        for issue in style_issues[:3]:  # Show top 3
+            line = issue.get("location", {}).get("row", "?")
+            code = issue.get("code", "")
+            message = issue.get("message", "")
+            feedback_lines.append(f"  Line {line}: [{code}] {message}")
+        if len(style_issues) > 3:
+            feedback_lines.append(f"  ... and {len(style_issues) - 3} more style issues")
+
+    # Add helpful suggestions
+    feedback_lines.extend([
+        "\n💡 QUICK FIXES:",
+        f"  • Run: ruff check {os.path.relpath(file_path, '/home/devcontainers/flowed')} --fix",
+        f"  • Auto-format: ruff format {os.path.relpath(file_path, '/home/devcontainers/flowed')}",
+        "  • See config: RUFF_CONFIG_GUIDE.md",
+        f"{'='*70}\n"
+    ])
+
+    return "\n".join(feedback_lines)
+
+
+def run_ruff_check_async(file_path: str) -> None:
+    """Run Ruff check asynchronously in background thread."""
+    def _check():
+        try:
+            subprocess.run(
+                ["ruff", "check", file_path, "--fix"],
+                check=False, capture_output=True,
+                timeout=5,
+                cwd="/home/devcontainers/flowed"
+            )
+        except Exception:
+            pass  # Silent background fixing
+
+    # Run in background thread
+    thread = threading.Thread(target=_check, daemon=True)
+    thread.start()
+
+
+def run_optimized_processing(input_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    """Run post-tool processing through optimized pipeline."""
+    if not _pipeline:
+        return None
+
+    try:
+        # Execute pipeline
+        result = _pipeline.process(input_data)
+
+        # Check if result is a dict with guidance info
+        if isinstance(result, dict):
+            guidance = result.get("guidance", {})
+            if guidance.get("needs_guidance"):
+                return guidance
+
+        return None
+
+    except Exception as e:
+        print(f"Error in optimized processing: {e}", file=sys.stderr)
+        return None
+
+
+def track_claude_flow_metrics_async(tool_name: str, tool_input: Dict[str, Any], success: bool):
+    """Track metrics through claude-flow asynchronously."""
+    def _track():
+        try:
+            cmd_args = [
+                "npx", "claude-flow@alpha", "hooks", "post-tool",
+                "--tool", tool_name,
+                "--success", str(success).lower(),
+                "--track-metrics", "true",
+                "--async", "true"
+            ]
+
+            subprocess.run(cmd_args, check=False, timeout=3, capture_output=True)
+        except Exception:
+            pass
+
+    # Run in background thread
+    thread = threading.Thread(target=_track, daemon=True)
+    thread.start()
+
+
+def main():
+    """Main hook handler with optimized post-tool processing."""
+    try:
+        # Read input from stdin
+        input_data = json.load(sys.stdin)
+    except json.JSONDecodeError as e:
+        print(f"Error: Invalid JSON input: {e}", file=sys.stderr)
+        sys.exit(1)
+
+    # Initialize optimization infrastructure on first run
+    if OPTIMIZATION_AVAILABLE and _metrics_cache is None:
+        initialize_optimization_infrastructure()
+
+    tool_name = input_data.get("tool_name", "")
+    tool_input = input_data.get("tool_input", {})
+    tool_response = input_data.get("tool_response", {})
+    success = tool_response.get("success", True)
+
+    # Track metrics asynchronously
+    track_claude_flow_metrics_async(tool_name, tool_input, success)
+
+    # Skip certain tools
+    skip_tools = {"TodoWrite", "Glob", "LS"}
+    if tool_name in skip_tools:
+        sys.exit(0)
+
+    # Try optimized processing first
+    if OPTIMIZATION_AVAILABLE and _pipeline:
+        print("⚡ Running optimized post-tool processing...", file=sys.stderr)
+        guidance = run_optimized_processing(input_data)
+
+        if guidance and guidance.get("needs_guidance"):
+            # Provide guidance for drift correction
+            severity = guidance.get("severity", "medium")
+            drift_type = guidance.get("drift_type", "unknown")
+
+            print(f"\n{'='*60}", file=sys.stderr)
+            print(f"🎯 Workflow Optimization Detected ({severity} priority)", file=sys.stderr)
+            print(f"Drift Type: {drift_type}", file=sys.stderr)
+
+            if drift_type == "sequential_drift":
+                print("\n💡 Consider using BatchTool for parallel operations:", file=sys.stderr)
+                print("- Combine multiple similar operations in one message", file=sys.stderr)
+                print("- Use TodoWrite with 5-10+ todos in ONE call", file=sys.stderr)
+                print("- Spawn all Task agents concurrently", file=sys.stderr)
+
+            elif drift_type == "coordination_drift":
+                print("\n💡 Consider using MCP coordination tools:", file=sys.stderr)
+                print("- Initialize swarm with mcp__claude-flow__swarm_init", file=sys.stderr)
+                print("- Spawn specialized agents for complex tasks", file=sys.stderr)
+                print("- Use memory_usage for cross-session persistence", file=sys.stderr)
+
+            print(f"{'='*60}\n", file=sys.stderr)
+
+            # Exit with code 2 to provide guidance
+            sys.exit(2)
+
+    # Check Python files with Ruff for code quality issues
+    ruff_result = check_python_files_with_ruff(tool_name, tool_input)
+    if ruff_result and ruff_result.get("has_issues"):
+        # Format and display Ruff feedback
+        feedback = format_ruff_feedback(ruff_result)
+        if feedback:
+            print(feedback, file=sys.stderr)
+
+            # Optional: Run background auto-fixing
+            file_path = ruff_result.get("file_path")
+            if file_path and os.environ.get("CLAUDE_RUFF_AUTOFIX", "true").lower() == "true":
+                run_ruff_check_async(file_path)
+
+            # Exit with code 2 to signal issues found (non-blocking guidance)
+            print("💡 TIP: Address these code quality issues to improve maintainability", file=sys.stderr)
+            sys.exit(2)
+
+    # Fall back to standard analysis if available
+    if MODULES_AVAILABLE:
+        try:
+            # Lazy import with safe fallback to avoid unbound symbol issues
+            try:
+                from modules.post_tool.manager import PostToolAnalysisManager  # type: ignore
+            except Exception:
+                PostToolAnalysisManager = None  # type: ignore[assignment,misc]
+
+            if PostToolAnalysisManager is None:
+                raise ImportError("PostToolAnalysisManager unavailable")
+
+            analysis_manager = PostToolAnalysisManager()
+
+            if os.environ.get("CLAUDE_HOOKS_DEBUG"):
+                # Import reporter lazily and guard it as optional
+                try:
+                    from modules.post_tool.manager import DebugAnalysisReporter  # type: ignore
+                    debug_reporter = DebugAnalysisReporter(analysis_manager)
+                    debug_reporter.log_debug_info(tool_name, tool_input)
+                except Exception:
+                    # Debug reporter is optional; continue without it
+                    pass
+
+            # Perform analysis (guard against unexpected attribute errors)
+            if hasattr(analysis_manager, "analyze_tool_usage"):
+                analysis_manager.analyze_tool_usage(tool_name, tool_input, tool_response)
+
+        except Exception as e:
+            print(f"Warning: Standard analysis failed: {e}", file=sys.stderr)
+
+    # Success - no guidance needed
+    sys.exit(0)
+
+
+def cleanup():
+    """Cleanup optimization resources."""
+    global _async_db, _parallel_analyzer, _pipeline
+
+    if _async_db:
+        # Some async DB managers expose 'shutdown', others 'close'/'stop'
+        try:
+            shutdown = getattr(_async_db, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+            else:
+                close = getattr(_async_db, "close", None)
+                if callable(close):
+                    close()
+        except Exception:
+            pass
+
+    if _parallel_analyzer:
+        # ParallelValidationManager fallback may not expose 'shutdown'
+        try:
+            shutdown = getattr(_parallel_analyzer, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        except Exception:
+            pass
+
+    if _pipeline:
+        # Fallback pipeline may not expose 'shutdown'
+        try:
+            shutdown = getattr(_pipeline, "shutdown", None)
+            if callable(shutdown):
+                shutdown()
+        except Exception:
+            pass
+
+    # Metrics cache flushes automatically if present
+    # (Keep branch for symmetry and future extensibility)
+    _ = _metrics_cache
+
+
+# Register cleanup
+import atexit
+
+atexit.register(cleanup)
+
+
+if __name__ == "__main__":
+    main()

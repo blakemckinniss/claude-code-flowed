@@ -1,0 +1,55 @@
+{
+  "enabled_analyzers": [
+    "zen_bypass_analyzer",
+    "flow_coordination_analyzer",
+    "native_overuse_analyzer", 
+    "workflow_pattern_analyzer",
+    "batching_opportunity_analyzer",
+    "memory_coordination_analyzer"
+  ],
+  "guidance_settings": {
+    "max_guidance_frequency": 4,
+    "escalation_threshold": 3,
+    "emergency_threshold": 5,
+    "context_enhancement": true
+  },
+  "drift_sensitivity": {
+    "zen_bypass": "normal",
+    "native_overuse": "normal", 
+    "workflow_fragmentation": "lenient",
+    "memory_coordination": "strict"
+  },
+  "blocking_thresholds": {
+    "critical_only": false,
+    "emergency_escalation": true,
+    "major_with_high_priority": true
+  },
+  "hive_enforcement": {
+    "queen_zen_priority": 1500,
+    "flow_worker_priority": 1000,
+    "enforce_hierarchy": true,
+    "allow_direct_filesystem": false,
+    "require_memory_coordination": true
+  },
+  "custom_patterns": [
+    {
+      "name": "rapid_file_creation",
+      "pattern": "(Write|Edit){4,}",
+      "message": "Multiple file operations detected - consider MCP batching",
+      "severity": "minor",
+      "suggested_tools": ["mcp__filesystem__write_multiple_files", "mcp__zen__planner"]
+    },
+    {
+      "name": "subagent_cascade", 
+      "pattern": "Task → Task → Task",
+      "message": "Multiple subagents without hive memory coordination",
+      "severity": "moderate",
+      "suggested_tools": ["mcp__claude-flow__memory_usage", "mcp__zen__consensus"]
+    }
+  ],
+  "debug": {
+    "enable_detailed_logging": false,
+    "log_analyzer_decisions": false,
+    "show_evidence_scores": false
+  }
+}

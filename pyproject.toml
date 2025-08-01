@@ -1,0 +1,124 @@
+[build-system]
+requires = ["setuptools>=45", "wheel", "setuptools_scm"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "flowed"
+description = "Claude Flow - Intelligent workflow automation and optimization system"
+readme = "CLAUDE.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Claude Flow Contributors"}
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = []
+dynamic = ["version"]
+
+[project.optional-dependencies]
+dev = [
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-mock>=3.10.0",
+]
+
+[tool.ruff]
+# Assume Python 3.8+ for rule compatibility
+target-version = "py38"
+
+# Enable auto-fixing for all fixable rules
+fix = true
+
+# Ignore long line rule E501 (handled by formatter/black or intentional long strings)
+lint.ignore = ["E501"]
+
+# Files to include and exclude from linting
+include = ["*.py", "*.pyi", "**/pyproject.toml"]
+exclude = [
+    ".bzr", ".direnv", ".eggs", ".git", ".git-rewrite", ".hg", ".mypy_cache",
+    ".nox", ".pants.d", ".pytype", ".ruff_cache", ".svn", ".tox", ".venv",
+    "__pypackages__", "_build", "buck-out", "build", "dist", "node_modules",
+    "venv",
+    # Project-specific excludes
+    ".claude-flow/cache/*", ".claude/hooks/cache/*", ".claude/hooks/db/*",
+    "**/.session/*",
+]
+
+[tool.ruff.lint]
+# Select rule sets that focus on errors, bugs, and security vulnerabilities.
+# This avoids stylistic or opinionated checks.
+select = [
+    # Core
+    "F",   # Pyflakes (undefined names, unused imports/vars)
+    "E",   # pycodestyle errors (syntax errors)
+    "UP",  # pyupgrade (modern, safer syntax)
+    
+    # High-Impact Bug Detection
+    "B",   # flake8-bugbear (likely bugs)
+    "BLE", # flake8-blind-except (don't use `except Exception:`)
+    "A",   # flake8-builtins (shadowing builtins)
+    "TCH", # flake8-type-checking (type checking block issues)
+    "TRY", # tryceratops (exception handling anti-patterns)
+    
+    # Leftover Debug Code
+    "T10", # flake8-debugger (leftover `breakpoint()`)
+    "T20", # flake8-print (leftover `print()`)
+    
+    # Security
+    "S",   # flake8-bandit (security vulnerabilities)
+    
+    # Pylint
+    "PLE", # Pylint Errors
+    "PLW", # Pylint Warnings (these are generally less stylistic than other PL categories)
+    
+    # Ruff-specific
+    "RUF", # Ruff-specific rules, often for correctness and ambiguity
+]
+
+# Ignore specific rules that conflict with project needs.
+ignore = [
+    # Allow TODO comments during development
+    "FIX002", "TD002", "TD003",
+    
+    # Allow print statements, as they are used for hook communication
+    "T201",
+    
+    # Allow assert statements, useful for development and required in tests
+    "S101",
+    
+    # Allow subprocess usage for hook execution, but review these manually
+    "S603", "S607",
+    
+    # Allow broad exception catching in specific fallback scenarios
+    "BLE001",
+    
+    # Allow unused imports in __init__.py files (common pattern for exposing APIs)
+    "F401", 
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Test files can use asserts
+"**/test_*.py" = ["S101"]
+
+# Hook files are allowed to use print for communication
+"**/*hook*.py" = ["T201"]
+
+# __init__.py files are allowed to have unused imports to define the public API
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.lint.mccabe]
+# Set a reasonable cyclomatic complexity limit to prevent overly complex functions.
+# This is a high-value check for code maintainability.
+max-complexity = 15
