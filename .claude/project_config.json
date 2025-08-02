@@ -1,0 +1,106 @@
+{
+  "project": {
+    "id": "flowed",
+    "name": "Claude Flow Project",
+    "version": "1.0.0",
+    "description": "SPARC Development Environment with Claude-Flow orchestration",
+    "created": "2025-08-01T00:00:00Z",
+    "lastModified": "2025-08-01T00:00:00Z"
+  },
+  "memory": {
+    "namespace": "flowed",
+    "persistence": {
+      "enabled": true,
+      "backend": "claude-flow",
+      "ttl": 2592000,
+      "maxSize": "100MB"
+    },
+    "semantic": {
+      "enabled": true,
+      "indexing": true,
+      "vectorStore": true,
+      "contextDepth": 5
+    },
+    "categories": {
+      "project": {
+        "description": "Project-specific configurations and patterns",
+        "priority": 1
+      },
+      "architecture": {
+        "description": "Architectural decisions and system design",
+        "priority": 2
+      },
+      "patterns": {
+        "description": "Development patterns and best practices",
+        "priority": 3
+      },
+      "tasks": {
+        "description": "Task history and execution patterns",
+        "priority": 4
+      },
+      "errors": {
+        "description": "Error patterns and resolutions",
+        "priority": 5
+      },
+      "optimization": {
+        "description": "Performance optimizations and improvements",
+        "priority": 6
+      }
+    }
+  },
+  "hooks": {
+    "memory": {
+      "enabled": true,
+      "autoCapture": true,
+      "captureThreshold": 0.7,
+      "semanticAnalysis": true,
+      "lifecycle": {
+        "pre_tool": true,
+        "post_tool": true,
+        "session_start": true,
+        "session_end": true,
+        "user_prompt": true
+      }
+    }
+  },
+  "integration": {
+    "claudeFlow": {
+      "enabled": true,
+      "memorySync": true,
+      "autoNamespace": true,
+      "commands": {
+        "store": "npx claude-flow memory store",
+        "retrieve": "npx claude-flow memory get",
+        "search": "npx claude-flow memory search",
+        "sync": "npx claude-flow memory sync"
+      }
+    }
+  },
+  "vectorSearch": {
+    "enabled": true,
+    "provider": "local",
+    "model": "tfidf-local",
+    "dimensions": 384,
+    "similarityThreshold": 0.60,
+    "cacheSize": 1000,
+    "batchSize": 50,
+    "timeout": 30
+  },
+  "contextInjection": {
+    "enabled": true,
+    "maxMemories": 5,
+    "relevanceThreshold": 0.8,
+    "categories": ["architecture", "patterns", "tasks", "optimization"],
+    "claudeCodeVisibility": true
+  },
+  "context": {
+    "sparc": {
+      "methodology": true,
+      "phases": ["specification", "pseudocode", "architecture", "refinement", "completion"]
+    },
+    "agents": {
+      "preferred": ["architect", "coder", "reviewer", "tester", "planner"],
+      "swarmPatterns": ["hierarchical", "mesh", "adaptive"]
+    }
+  }
+}

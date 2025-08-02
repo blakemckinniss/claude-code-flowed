@@ -74,6 +74,14 @@ except ImportError:
     PatternStorageClass = FallbackPatternStorage
     PatternClass = FallbackPattern
 
+# Import memory integration
+try:
+    from modules.memory.hook_memory_integration import get_hook_memory_integration
+    MEMORY_INTEGRATION = True
+except ImportError:
+    get_hook_memory_integration = None
+    MEMORY_INTEGRATION = False
+
 
 class SessionEndCoordinator:
     """Coordinates comprehensive session cleanup and learning storage."""
@@ -111,12 +119,34 @@ class SessionEndCoordinator:
             "neural_patterns_learned": 0,
             "performance_score": 0.0,
             "workflow_efficiency": 0.0,
-            "recommendations": []
+            "recommendations": [],
+            "memories_persisted": 0
         }
 
         if not self.current_session_id:
             print("⚠️ No active session found", file=sys.stderr)
             return session_summary
+        
+        # Persist session memories
+        if MEMORY_INTEGRATION and get_hook_memory_integration:
+            try:
+                memory_integration = get_hook_memory_integration()
+                # Capture session end summary
+                import asyncio
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        memory_integration.capture_session_end_memory(session_summary)
+                    )
+                    # Get memory stats
+                    memory_stats = memory_integration.get_session_stats()
+                    session_summary["memories_persisted"] = memory_stats.get("memories_created", 0)
+                finally:
+                    loop.close()
+                print(f"💾 Persisted {session_summary['memories_persisted']} memories to project namespace", file=sys.stderr)
+            except Exception as e:
+                print(f"Warning: Failed to persist session memories: {e}", file=sys.stderr)
 
         # Analyze session performance
         session_summary["performance_score"] = self._analyze_session_performance()
@@ -397,9 +427,9 @@ def main():
         if len(sys.argv) > 1 or not sys.stdin.isatty():
             # Hook mode - maintain JSON compatibility
             try:
-                input_data = json.load(sys.stdin)
+                json.load(sys.stdin)
             except (json.JSONDecodeError, EOFError):
-                input_data = {}
+                pass
 
             # Perform enhanced session end processing
             coordinator = SessionEndCoordinator()

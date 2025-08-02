@@ -23,7 +23,7 @@ class Config:
         """Load configuration from file."""
         if os.path.exists(self.config_path):
             try:
-                with open(self.config_path, 'r') as f:
+                with open(self.config_path) as f:
                     self.config = json.load(f)
             except Exception as e:
                 print(f"Warning: Failed to load config from {self.config_path}: {e}")

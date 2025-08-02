@@ -6,8 +6,7 @@ to significantly reduce hook execution time.
 
 import asyncio
 import concurrent.futures
-import threading
-from typing import List, Dict, Any, Callable, Optional
+from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
 import time
 
@@ -19,7 +18,7 @@ class ValidationResult:
     success: bool
     severity: str = "info"
     message: str = ""
-    metadata: Dict[str, Any] = None
+    metadata: Optional[Dict[str, Any]] = None
     duration: float = 0.0
     
     def __post_init__(self):
@@ -84,7 +83,7 @@ class ParallelValidationManager:
                     validator_name=f"validator_{i}",
                     success=False,
                     severity="error",
-                    message=f"Validation error: {str(result)}"
+                    message=f"Validation error: {result!s}"
                 ))
             elif isinstance(result, ValidationResult):
                 valid_results.append(result)
@@ -133,7 +132,7 @@ class ParallelValidationManager:
                 validator_name=getattr(validator, "__class__.__name__", "unknown"),
                 success=False,
                 severity="error",
-                message=f"Validation error: {str(e)}",
+                message=f"Validation error: {e!s}",
                 duration=time.time() - start_time
             )
     

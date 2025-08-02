@@ -4,6 +4,8 @@ This module implements the circuit breaker pattern to prevent cascading failures
 and provide graceful degradation when hooks experience repeated failures.
 """
 
+import asyncio
+import sys
 import time
 import threading
 from typing import Dict, Any, Callable, Optional
@@ -55,7 +57,7 @@ class HookCircuitBreaker:
         self._lock = threading.RLock()
         
         # Fallback function when circuit is open
-        self._fallback_func = None
+        self._fallback_func: Optional[Callable[..., Any]] = None
     
     def set_fallback(self, fallback_func: Callable[..., Any]):
         """Set fallback function for when circuit is open."""
@@ -100,7 +102,7 @@ class HookCircuitBreaker:
             
             return result
             
-        except Exception as e:
+        except Exception:
             with self._lock:
                 self._on_failure()
             
@@ -136,7 +138,7 @@ class HookCircuitBreaker:
             
             return result
             
-        except Exception as e:
+        except Exception:
             with self._lock:
                 self._on_failure()
             
@@ -170,7 +172,7 @@ class HookCircuitBreaker:
     
     def _should_attempt_reset(self) -> bool:
         """Check if we should attempt to reset the circuit."""
-        return (self.stats.last_failure_time and 
+        return (self.stats.last_failure_time is not None and
                 time.time() - self.stats.last_failure_time > self.recovery_timeout)
     
     def _transition_to_open(self):
@@ -210,8 +212,10 @@ class HookCircuitBreaker:
         if self._fallback_func:
             try:
                 return self._fallback_func(*args, **kwargs)
-            except Exception:
-                pass
+            except Exception as e:
+                # Log fallback failures - this is critical information for debugging
+                print(f"Warning: Circuit breaker fallback function failed: {e}", file=sys.stderr)
+                # Continue to default fallback response
         
         # Default fallback response
         return {
@@ -257,7 +261,6 @@ class HookCircuitBreaker:
 
 
 # Fix import for async support
-import asyncio
 
 
 class CircuitBreakerManager:

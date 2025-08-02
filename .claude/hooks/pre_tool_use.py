@@ -14,6 +14,7 @@ import json
 import sys
 from pathlib import Path
 import time
+import asyncio
 from typing import Any, Dict, Optional
 
 # Set up hook paths using centralized path resolver
@@ -21,7 +22,6 @@ from modules.utils.path_resolver import setup_hook_paths
 setup_hook_paths()
 
 # Now we can import cleanly without explicit sys.path.insert calls
-from modules.utils.process_manager import managed_subprocess_run
 
 # Import optimization modules
 try:
@@ -36,10 +36,18 @@ try:
         PerformanceMetricsCache,
         ValidatorCache,
     )
+    # Import new integrated optimization system
+    from modules.optimization.hook_integration import (
+        get_hook_integration,
+        execute_pre_tool_validators_optimized,
+        get_optimization_status
+    )
     OPTIMIZATION_AVAILABLE = True
+    NEW_OPTIMIZER_AVAILABLE = True
 except ImportError as e:
     print(f"Warning: Optimization modules not available: {e}", file=sys.stderr)
     OPTIMIZATION_AVAILABLE = False
+    NEW_OPTIMIZER_AVAILABLE = False
     # Set to None for type checking
     HookExecutionPool = None
     ValidatorCache = None
@@ -50,25 +58,19 @@ except ImportError as e:
     ContextTracker = None
     BoundedPatternStorage = None
     HookPipeline = None
+    get_hook_integration = None
+    execute_pre_tool_validators_optimized = None
+    get_optimization_status = None
 
-# Import existing validation modules
+# Import memory integration
 try:
-    from modules.pre_tool import (
-        DebugValidationReporter,
-        GuidanceOutputHandler,
-        PreToolAnalysisManager,
-    )
-    ENHANCED_VALIDATION_AVAILABLE = True
-except ImportError as e:
-    print(f"Warning: Enhanced validation modules not available: {e}", file=sys.stderr)
-    ENHANCED_VALIDATION_AVAILABLE = False
-    # Set to None for type checking
-    PreToolAnalysisManager = None
-    GuidanceOutputHandler = None
-    DebugValidationReporter = None
+    from modules.memory.hook_memory_integration import get_hook_memory_integration
+    MEMORY_INTEGRATION = True
+except ImportError:
+    get_hook_memory_integration = None
+    MEMORY_INTEGRATION = False
 
-
-# Global instances for persistent optimization
+# Global optimization instances - initialized once
 _hook_pool: Optional[Any] = None
 _validator_cache: Optional[Any] = None
 _metrics_cache: Optional[Any] = None
@@ -79,21 +81,16 @@ _context_tracker: Optional[Any] = None
 _pattern_storage: Optional[Any] = None
 _pipeline: Optional[Any] = None
 
-
-def initialize_optimization_infrastructure():
+def initialize_optimization():
     """Initialize all optimization components."""
     global _hook_pool, _validator_cache, _metrics_cache, _async_db
     global _parallel_validator, _circuit_breaker, _context_tracker
     global _pattern_storage, _pipeline
 
-    if not OPTIMIZATION_AVAILABLE:
-        print("Warning: Optimization modules not available - skipping initialization", file=sys.stderr)
-        return
-
     try:
-        # Initialize hook execution pool
+        # Initialize execution pool
         if HookExecutionPool:
-            _hook_pool = HookExecutionPool(pool_size=4)
+            _hook_pool = HookExecutionPool(pool_size=6)
 
         # Initialize caches
         if ValidatorCache:
@@ -138,8 +135,6 @@ def initialize_optimization_infrastructure():
     except Exception as e:
         print(f"Warning: Failed to initialize optimization: {e}", file=sys.stderr)
         # Reset global optimization flag if initialization completely fails
-        global OPTIMIZATION_AVAILABLE
-        OPTIMIZATION_AVAILABLE = False
 
 
 def create_optimized_validation_pipeline() -> Optional[Any]:
@@ -185,12 +180,34 @@ def create_optimized_validation_pipeline() -> Optional[Any]:
             validators.append(("file_permissions", check_file_permissions))
             validators.append(("file_pattern", check_file_patterns))
 
-        # Run validators in parallel
-        if validators and _parallel_validator and hasattr(_parallel_validator, "validate_parallel"):
-            results = _parallel_validator.validate_parallel(
-                tool_input, validators
-            )
-            data["validation_results"] = results
+        # Run validators (using sequential fallback for async compatibility)
+        if validators:
+            validation_dict = {}
+            for name, validator in validators:
+                try:
+                    if callable(validator):
+                        validator(tool_name, tool_input)
+                        validation_dict[name] = {
+                            "success": True,
+                            "error": "",
+                            "severity": "info",
+                            "validator_name": name
+                        }
+                    else:
+                        validation_dict[name] = {
+                            "success": False,
+                            "error": "Validator not callable",
+                            "severity": "error",
+                            "validator_name": name
+                        }
+                except Exception as ve:
+                    validation_dict[name] = {
+                        "success": False,
+                        "error": str(ve),
+                        "severity": "error",
+                        "validator_name": name
+                    }
+            data["validation_results"] = validation_dict
 
         return data
 
@@ -199,7 +216,7 @@ def create_optimized_validation_pipeline() -> Optional[Any]:
         if context.get("cached"):
             return data
 
-        tool_name = data.get("tool_name", "")
+        data.get("tool_name", "")
 
         def validation_func():
             # Check if any validation failed
@@ -209,234 +226,228 @@ def create_optimized_validation_pipeline() -> Optional[Any]:
                     raise ValueError(f"Validation failed: {result.get('error')}")
             return data
 
-        def fallback_func():
-            # Fallback to basic validation
-            print("⚠️ Circuit breaker open - using fallback validation", file=sys.stderr)
+        if _circuit_breaker:
+            try:
+                result = asyncio.run(_circuit_breaker.execute_with_breaker(validation_func))
+                return result
+            except Exception as e:
+                # Circuit breaker tripped
+                data["circuit_breaker_error"] = str(e)
+                return data
+        else:
+            return validation_func()
+
+    # Stage 4: Context tracking
+    def track_context(data, context):
+        if context.get("cached"):
             return data
 
-        if _circuit_breaker and hasattr(_circuit_breaker, "execute_sync"):
-            return _circuit_breaker.execute_sync(validation_func)
-        return validation_func()
+        tool_name = data.get("tool_name", "")
+        data.get("tool_input", {})
 
-    # Stage 4: Update metrics and cache
-    def update_metrics_and_cache(data, context):
-        if not context.get("cached"):
-            # Cache the result
-            tool_name = data.get("tool_name", "")
-            tool_input = data.get("tool_input", {})
-            if _validator_cache and hasattr(_validator_cache, "store_result"):
-                _validator_cache.store_result(tool_name, tool_input, data)
+        if _context_tracker:
+            _context_tracker.add_tool_operation(tool_name, {
+                "type": "pre_tool_validation",
+                "timestamp": time.time(),
+                "status": "success" if not data.get("circuit_breaker_error") else "failed"
+            })
 
-            # Update metrics
-            if _metrics_cache and hasattr(_metrics_cache, "record_metric"):
-                _metrics_cache.record_metric({
-                    "operation_type": "pre_tool_validation",
-                    "tool": data.get("tool_name"),
-                    "cached": False,
-                    "duration": context.get("duration", 0),
-                    "timestamp": time.time()
-                })
+        return data
+
+    # Stage 5: Cache result
+    def cache_result(data, context):
+        if context.get("cached"):
+            return data
+
+        cache_key = context.get("cache_key")
+        if cache_key and _validator_cache and hasattr(_validator_cache, "cache_validation_result"):
+            _validator_cache.cache_validation_result(cache_key, data)
 
         return data
 
     # Add stages to pipeline
-    if hasattr(pipeline, "add_stage"):
-        pipeline.add_stage("parse_cache", parse_and_check_cache, timeout=1.0)
-        pipeline.add_stage("validate", parallel_validation, timeout=5.0)
-        pipeline.add_stage("circuit_break", circuit_breaker_check, timeout=2.0)
-        pipeline.add_stage("metrics", update_metrics_and_cache, timeout=1.0)
+    pipeline.add_stage("parse_cache", parse_and_check_cache)
+    pipeline.add_stage("validation", parallel_validation)
+    pipeline.add_stage("circuit_breaker", circuit_breaker_check)
+    pipeline.add_stage("context_tracking", track_context)
+    pipeline.add_stage("cache_result", cache_result)
 
     return pipeline
 
 
-# Validator functions
-def validate_bash_safety(command: str) -> Dict[str, Any]:
-    """Validate bash command safety."""
-    dangerous_patterns = [
-        "rm -rf /",
-        "dd if=/dev/zero",
-        "fork bomb",
-        ":(){ :|:& };:",
-        "> /dev/sda",
-        "chmod -R 777 /"
-    ]
-
-    for pattern in dangerous_patterns:
-        if pattern in command:
-            return {
-                "success": False,
-                "error": f"Dangerous command pattern detected: {pattern}"
-            }
-
-    return {"success": True}
-
-
-def check_command_resources(command: str) -> Dict[str, Any]:
-    """Check if command might consume excessive resources."""
-    resource_intensive = [
-        "find /",
-        "grep -r",
-        "du -h /",
-        "ps aux"
-    ]
-
-    for pattern in resource_intensive:
-        if pattern in command and "limit" not in command:
-            return {
-                "success": True,
-                "warning": f"Resource intensive command: {pattern}"
-            }
-
-    return {"success": True}
-
-
-def check_file_permissions(file_info: Dict[str, Any]) -> Dict[str, Any]:
-    """Check file permissions before edit."""
-    file_path = file_info.get("file_path") or file_info.get("path", "")
-
-    if file_path.startswith("/etc/") or file_path.startswith("/sys/"):
-        return {
-            "success": False,
-            "error": f"Cannot edit system file: {file_path}"
-        }
-
-    return {"success": True}
-
-
-def check_file_patterns(file_info: Dict[str, Any]) -> Dict[str, Any]:
-    """Check file patterns for known issues."""
-    file_path = file_info.get("file_path") or file_info.get("path", "")
-
-    # Check for pattern matches
-    if _pattern_storage and hasattr(_pattern_storage, "get_all_patterns"):
-        patterns = _pattern_storage.get_all_patterns()
-        for pattern_id, pattern_data in patterns.items():
-            # Check if this pattern is relevant to the file type/path
-            pattern_type = pattern_data.get("type", "")
-            if pattern_type and pattern_type in file_path:
-                return {
-                    "success": True,
-                    "info": f"Known pattern for type: {pattern_type}"
-                }
-
-    return {"success": True}
-
-
-def run_optimized_validation(input_data: Dict[str, Any]) -> Optional[str]:
-    """Run validation through optimized pipeline."""
-    if not _pipeline or not hasattr(_pipeline, "execute"):
-        return None
-
+def main(data: str) -> str:
+    """Main hook entry point with optimized processing."""
     try:
-        start_time = time.time()
-
-        # Execute pipeline
-        result = _pipeline.execute(input_data)
-
-        # Record performance metrics
-        if _metrics_cache and hasattr(_metrics_cache, "record_metric"):
-            _metrics_cache.record_metric({
-                "operation_type": "pipeline_execution",
-                "duration": getattr(result, "total_duration", 0),
-                "stages_completed": len(getattr(result, "stages_completed", [])),
-                "success": getattr(result, "success", True)
-            })
-
-        # Check for errors
-        if not getattr(result, "success", True):
-            errors = getattr(result, "errors", {})
-            if errors:
-                return f"Validation failed: {', '.join(errors.values())}"
-
-        # Check for validation failures
-        results_data = getattr(result, "results", {})
-        validation_results = results_data.get("validate", {}).get("validation_results", {})
-        for validator_name, validator_result in validation_results.items():
-            if not validator_result.get("success", True):
-                return validator_result.get("error", "Validation failed")
-
-        return None
-
-    except Exception as e:
-        print(f"Error in optimized validation: {e}", file=sys.stderr)
-        return str(e)
-
-
-def main():
-    """Main hook handler with optimized performance."""
-    try:
-        # Read input from stdin
-        input_data = json.load(sys.stdin)
-    except json.JSONDecodeError as e:
-        print(f"Error: Invalid JSON input: {e}", file=sys.stderr)
-        sys.exit(1)
-
-    # Initialize optimization infrastructure on first run
-    if OPTIMIZATION_AVAILABLE and _hook_pool is None:
-        initialize_optimization_infrastructure()
-
-    tool_name = input_data.get("tool_name", "")
-    tool_input = input_data.get("tool_input", {})
-
-    # Try optimized validation first
-    if OPTIMIZATION_AVAILABLE and _pipeline:
-        print("⚡ Running optimized validation pipeline...", file=sys.stderr)
-        error = run_optimized_validation(input_data)
-
-        if error:
-            print(f"🚨 Optimized Validation Failed:\n{error}", file=sys.stderr)
-            sys.exit(2)
-        else:
-            print("✅ Optimized validation completed successfully", file=sys.stderr)
-            sys.exit(0)
-
-    # Fall back to enhanced validation
-    if ENHANCED_VALIDATION_AVAILABLE and PreToolAnalysisManager:
-        try:
-            analysis_manager = PreToolAnalysisManager()
-            if DebugValidationReporter:
-                debug_reporter = DebugValidationReporter(analysis_manager)
-                debug_reporter.log_debug_info(tool_name, tool_input)
-
-            print("👑 Queen ZEN's Hive Intelligence: Analyzing tool usage...", file=sys.stderr)
-
-            guidance_info = analysis_manager.validate_tool_usage(tool_name, tool_input)
-
-            if guidance_info and GuidanceOutputHandler:
-                GuidanceOutputHandler.handle_validation_guidance(guidance_info)
-            else:
-                print("✅ Hive Intelligence: Tool usage is optimal - proceeding", file=sys.stderr)
-                if GuidanceOutputHandler:
-                    GuidanceOutputHandler.handle_no_guidance()
-
-        except Exception as e:
-            print(f"Warning: Enhanced validation failed: {e}", file=sys.stderr)
-
-    # Legacy validation as final fallback
-    print("🔄 Using legacy validation system...", file=sys.stderr)
-
-    if tool_name == "Bash":
-        command = tool_input.get("command", "")
-        if command:
+        input_data = json.loads(data)
+        tool_name = input_data.get("tool_name", "")
+        tool_input = input_data.get("tool_input", {})
+        
+        # Initialize memory integration
+        memory_integration = None
+        if MEMORY_INTEGRATION and get_hook_memory_integration:
             try:
-                result = managed_subprocess_run(
-                    ["npx", "claude-flow@alpha", "hooks", "pre-command",
-                     "--command", command,
-                     "--validate-safety", "true"],
-                    check=False, capture_output=True,
-                    text=True,
-                    timeout=10,
-                    max_memory_mb=50,  # 50MB memory limit
-                    tags={"hook": "pre-command", "type": "validation"}
-                )
-                if result.returncode != 0:
-                    print(f"🚨 Bash Command Validation Failed:\n{result.stderr}", file=sys.stderr)
-                    sys.exit(2)
+                memory_integration = get_hook_memory_integration()
+                # Capture pre-tool memory asynchronously
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    loop.run_until_complete(
+                        memory_integration.capture_pre_tool_memory(tool_name, tool_input)
+                    )
+                finally:
+                    loop.close()
             except Exception as e:
-                print(f"Error validating command: {e}", file=sys.stderr)
-                sys.exit(2)
+                print(f"Warning: Memory capture failed: {e}", file=sys.stderr)
+        
+        # Try new integrated optimizer first
+        if NEW_OPTIMIZER_AVAILABLE and execute_pre_tool_validators_optimized:
+            print("🚀 Using new integrated optimizer for validation...", file=sys.stderr)
+            try:
+                # Define validators based on tool type
+                validators = []
+                if tool_name == "Bash":
+                    validators.extend([validate_bash_safety, check_command_resources])
+                elif tool_name in ["Write", "Edit", "MultiEdit"]:
+                    validators.extend([check_file_permissions, check_file_patterns])
+                
+                if validators:
+                    # Run async optimized validation
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        results = loop.run_until_complete(
+                            execute_pre_tool_validators_optimized(tool_name, tool_input, validators)
+                        )
+                        # Process results
+                        validation_results = {}
+                        for i, result in enumerate(results):
+                            validator_name = validators[i].__name__ if i < len(validators) else f"validator_{i}"
+                            if result is not None and isinstance(result, Exception):
+                                validation_results[validator_name] = {
+                                    "success": False,
+                                    "error": str(result),
+                                    "severity": "error"
+                                }
+                            else:
+                                validation_results[validator_name] = {
+                                    "success": True,
+                                    "error": "",
+                                    "severity": "info"
+                                }
+                        input_data["validation_results"] = validation_results
+                    finally:
+                        loop.close()
+                
+                return json.dumps(input_data)
+                
+            except Exception as e:
+                print(f"New optimizer failed, falling back to pipeline: {e}", file=sys.stderr)
+        
+        # Fall back to original pipeline optimization
+        if not _pipeline and OPTIMIZATION_AVAILABLE:
+            initialize_optimization()
+        
+        # Use optimized pipeline if available
+        if _pipeline and OPTIMIZATION_AVAILABLE:
+            print("⚡ Running optimized validation pipeline...", file=sys.stderr)
+            try:
+                result = _pipeline.execute(input_data, {})
+                if result and hasattr(result, 'data'):
+                    return json.dumps(result.data)
+                elif result and hasattr(result, 'to_dict'):
+                    return json.dumps(result.to_dict())
+                elif result:
+                    return json.dumps(result)
+                else:
+                    return json.dumps(input_data)
+            except Exception as e:
+                print(f"Pipeline failed, falling back to legacy: {e}", file=sys.stderr)
+                return fallback_validation(input_data)
+        else:
+            return fallback_validation(input_data)
+            
+    except Exception as e:
+        # According to Claude Hooks documentation, for PreToolUse hooks:
+        # - Exit code 2: Blocks the tool call and shows stderr to Claude
+        # - stderr is fed back to Claude for processing
+        print(f"Pre-tool validation failed: {e}", file=sys.stderr)
+        print("Hook validation error - tool execution blocked for safety", file=sys.stderr)
+        sys.exit(2)  # Block tool execution and provide feedback to Claude
 
-    print("✅ Validation completed successfully", file=sys.stderr)
+
+def fallback_validation(data: Dict[str, Any]) -> str:
+    """Fallback validation logic."""
+    tool_name = data.get("tool_name", "")
+    tool_input = data.get("tool_input", {})
+    
+    validation_results = {}
+    
+    # Basic validation based on tool type
+    if tool_name == "Bash":
+        try:
+            validate_bash_safety(tool_name, tool_input)
+            validation_results["command_safety"] = {"success": True, "error": ""}
+        except Exception as e:
+            validation_results["command_safety"] = {"success": False, "error": str(e)}
+    
+    elif tool_name in ["Write", "Edit", "MultiEdit"]:
+        try:
+            check_file_permissions(tool_name, tool_input)
+            validation_results["file_permissions"] = {"success": True, "error": ""}
+        except Exception as e:
+            validation_results["file_permissions"] = {"success": False, "error": str(e)}
+    
+    data["validation_results"] = validation_results
+    return json.dumps(data)
+
+
+def validate_bash_safety(tool_name: str, tool_input: Dict[str, Any]) -> None:
+    """Validate bash command safety."""
+    command = tool_input.get("command", "")
+    
+    # Basic safety checks
+    dangerous_patterns = [
+        "rm -rf /", "dd if=", ":(){ :|:& };:", "mkfs", "format",
+        "curl", "wget", "ssh", "ftp", "telnet"
+    ]
+    
+    for pattern in dangerous_patterns:
+        if pattern in command.lower():
+            raise ValueError(f"Potentially dangerous command pattern: {pattern}")
+
+
+def check_command_resources(tool_name: str, tool_input: Dict[str, Any]) -> None:
+    """Check if command might consume excessive resources."""
+    command = tool_input.get("command", "")
+    
+    # Check for resource-intensive operations
+    intensive_commands = ["find /", "grep -r", "tar -", "zip -r", "unzip"]
+    
+    for cmd in intensive_commands:
+        if cmd in command:
+            print(f"Warning: Command may be resource intensive: {cmd}", file=sys.stderr)
+
+
+def check_file_permissions(tool_name: str, tool_input: Dict[str, Any]) -> None:
+    """Check file operation permissions."""
+    path = tool_input.get("path", "")
+    
+    # Basic path validation
+    if path.startswith("/"):
+        if not path.startswith("/home/devcontainers/flowed"):
+            raise ValueError(f"File operations outside project directory not allowed: {path}")
+
+
+def check_file_patterns(tool_name: str, tool_input: Dict[str, Any]) -> None:
+    """Check for problematic file patterns."""
+    path = tool_input.get("path", "")
+    
+    # Check for system files
+    system_paths = ["/etc/", "/usr/", "/var/", "/sys/", "/proc/"]
+    
+    for sys_path in system_paths:
+        if path.startswith(sys_path):
+            raise ValueError(f"System file access not allowed: {path}")
 
 
 def cleanup():
@@ -451,14 +462,13 @@ def cleanup():
             _async_db.close()
 
     except Exception as e:
-        print(f"Warning: Error during cleanup: {e}", file=sys.stderr)
-
-
-# Register cleanup handler
-import atexit
-
-atexit.register(cleanup)
+        print(f"Error during cleanup: {e}", file=sys.stderr)
 
 
 if __name__ == "__main__":
-    main()
+    import atexit
+    atexit.register(cleanup)
+    
+    input_data = sys.stdin.read()
+    result = main(input_data)
+    print(result)

@@ -9,7 +9,8 @@ from ..patterns import (
     GitHubAnalyzer,
     TestingAnalyzer,
     PerformanceAnalyzer,
-    SwarmAnalyzer
+    SwarmAnalyzer,
+    CommandPatternsAnalyzer
 )
 
 
@@ -18,6 +19,7 @@ class AnalyzerManager:
     
     # Registry of available analyzers
     ANALYZER_REGISTRY: Dict[str, Type[Analyzer]] = {
+        "command_patterns": CommandPatternsAnalyzer,
         "hive_orchestration": HiveOrchestrationAnalyzer,
         "mcp_orchestration": MCPOrchestrationAnalyzer,
         "development": DevelopmentAnalyzer,
@@ -47,13 +49,14 @@ class AnalyzerManager:
         """Get priority for an analyzer."""
         # Higher priority for more specific analyzers
         priorities = {
-            "hive_orchestration": 1500,  # SUPREME - Queen ZEN commands the hive
-            "mcp_orchestration": 1000,   # HIGHEST - MCP ZEN is master orchestrator  
-            "swarm": 100,                # Coordination is critical
+            "command_patterns": 2000,     # SUPREME - Direct actionable commands
+            "hive_orchestration": 1500,   # Queen ZEN commands the hive
+            "mcp_orchestration": 1000,    # MCP ZEN is master orchestrator  
+            "swarm": 100,                 # Coordination is critical
             "performance": 80,
             "testing": 70,
             "github": 60,
-            "development": 50            # Lowest - most general
+            "development": 50             # Lowest - most general
         }
         return priorities.get(analyzer_name, 0)
     

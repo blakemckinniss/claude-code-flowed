@@ -48,7 +48,7 @@ class CustomPatternLoader:
             return None
         
         try:
-            with open(file_path, 'r') as f:
+            with open(file_path) as f:
                 patterns = json.load(f)
             
             if isinstance(patterns, list):

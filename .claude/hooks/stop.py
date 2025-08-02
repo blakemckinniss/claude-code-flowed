@@ -19,7 +19,7 @@ def main():
     """Main hook handler."""
     try:
         # Read input from stdin
-        input_data = json.load(sys.stdin)
+        json.load(sys.stdin)
     except json.JSONDecodeError as e:
         print(f"Error: Invalid JSON input: {e}", file=sys.stderr)
         sys.exit(1)

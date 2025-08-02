@@ -119,7 +119,7 @@ class SessionRestoreCoordinator:
             if not self.continuity_file.exists():
                 return False
             
-            with open(self.continuity_file, 'r') as f:
+            with open(self.continuity_file) as f:
                 continuity_data = json.load(f)
             
             # Restore key metrics
@@ -169,7 +169,7 @@ class SessionRestoreCoordinator:
                 if (current_dir / ".git").exists():
                     git_config = current_dir / ".git" / "config"
                     if git_config.exists():
-                        with open(git_config, 'r') as f:
+                        with open(git_config) as f:
                             config_content = f.read()
                             if "github.com" in config_content:
                                 print("🐙 GitHub context restored", file=sys.stderr)

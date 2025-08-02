@@ -40,7 +40,7 @@ def run_worker(worker_id):
 
 def execute_hook(request):
     """Execute a hook request."""
-    hook_type = request.get("hook_type")
+    request.get("hook_type")
     hook_path = request.get("hook_path")
     hook_data = request.get("hook_data", {})
     

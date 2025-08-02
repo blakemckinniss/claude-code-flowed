@@ -16,18 +16,38 @@ from .github_issue_analyzer import GitHubIssueAnalyzer
 from .github_release_analyzer import GitHubReleaseAnalyzer
 from .github_repo_analyzer import GitHubRepoAnalyzer
 from .github_sync_analyzer import GitHubSyncAnalyzer
+# Legacy validators - replaced by refactored versions in manager.py
+# from .concurrent_execution_validator import ConcurrentExecutionValidator
+# from .agent_patterns_validator import AgentPatternsValidator  
+# from .visual_formats_validator import VisualFormatsValidator
+# from .mcp_separation_validator import MCPSeparationValidator
+# from .duplication_detection_validator import DuplicationDetectionValidator
+from .rogue_system_validator import RogueSystemValidator
+from .conflicting_architecture_validator import ConflictingArchitectureValidator
+from .overwrite_protection_validator import OverwriteProtectionValidator
+from .claude_flow_suggester import ClaudeFlowSuggesterValidator
 
 __all__ = [
-    "ZenHierarchyValidator",
-    "EfficiencyOptimizer", 
-    "SafetyValidator",
-    "MCPCoordinationValidator",
-    "HiveWorkflowOptimizer",
-    "NeuralPatternValidator",
+    "ClaudeFlowSuggesterValidator",
+    "ConflictingArchitectureValidator",
+    "EfficiencyOptimizer",
     "GitHubCoordinatorAnalyzer",
+    "GitHubIssueAnalyzer",
     "GitHubPRAnalyzer",
-    "GitHubIssueAnalyzer", 
     "GitHubReleaseAnalyzer",
     "GitHubRepoAnalyzer",
-    "GitHubSyncAnalyzer"
+    "GitHubSyncAnalyzer",
+    "HiveWorkflowOptimizer",
+    "MCPCoordinationValidator",
+    "NeuralPatternValidator",
+    "OverwriteProtectionValidator",
+    # Legacy validators - replaced by refactored versions
+    # "ConcurrentExecutionValidator",
+    # "AgentPatternsValidator", 
+    # "VisualFormatsValidator",
+    # "MCPSeparationValidator",
+    # "DuplicationDetectionValidator",
+    "RogueSystemValidator",
+    "SafetyValidator",
+    "ZenHierarchyValidator"
 ]

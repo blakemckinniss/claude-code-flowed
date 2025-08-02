@@ -225,7 +225,7 @@ class BatchingOpportunityAnalyzer(DriftAnalyzer):
             severity=DriftSeverity.MINOR,
             tool_sequence=self.get_recent_tools(),
             missing_tools=["mcp__zen__planner"],
-            evidence_details=f"Multiple bash commands could be coordinated through hive intelligence",
+            evidence_details="Multiple bash commands could be coordinated through hive intelligence",
             correction_guidance="Queen ZEN can plan optimal command sequences and error handling",
             priority_score=25
         )

@@ -32,6 +32,17 @@ class PipelineResult:
     errors: Dict[str, str]
     total_duration: float
     stage_durations: Dict[str, float]
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for JSON serialization."""
+        return {
+            "success": self.success,
+            "stages_completed": self.stages_completed,
+            "results": self.results,
+            "errors": self.errors,
+            "total_duration": self.total_duration,
+            "stage_durations": self.stage_durations
+        }
 
 
 class StageProcessor(ABC):
@@ -146,7 +157,7 @@ class HookPipeline:
             success = len(errors) == 0
             
         except Exception as e:
-            self.logger.error(f"Pipeline execution failed: {e}")
+            self.logger.exception(f"Pipeline execution failed: {e}")
             success = False
             errors['pipeline'] = str(e)
         

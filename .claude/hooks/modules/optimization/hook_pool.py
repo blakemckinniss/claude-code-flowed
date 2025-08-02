@@ -16,6 +16,9 @@ import os
 from typing import Dict, Any, Optional, List
 from pathlib import Path
 
+# Import process manager for managed subprocess operations
+from ..utils.process_manager import managed_subprocess_popen, get_process_manager
+
 
 class HookWorkerProcess:
     """A persistent Python process for hook execution."""
@@ -27,6 +30,8 @@ class HookWorkerProcess:
         self.output_queue = queue.Queue()
         self.error_queue = queue.Queue()
         self.running = False
+        self.stdout_thread = None
+        self.stderr_thread = None
         self._start_process()
     
     def _start_process(self):
@@ -37,33 +42,49 @@ class HookWorkerProcess:
         if not worker_script.exists():
             self._create_worker_script(worker_script)
         
-        try:
-            self.process = subprocess.Popen(
-                [sys.executable, "-u", str(worker_script), str(self.worker_id)],
-                stdin=subprocess.PIPE,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                bufsize=1,
-                env={**os.environ, "PYTHONUNBUFFERED": "1"}
-            )
-            
-            # Verify process started successfully
-            if self.process.poll() is not None:
-                raise RuntimeError(f"Worker process {self.worker_id} failed to start")
-            
-            self.running = True
-            
-            # Start reader threads only after confirming process is running
-            threading.Thread(target=self._read_stdout, daemon=True).start()
-            threading.Thread(target=self._read_stderr, daemon=True).start()
-            
-        except Exception as e:
-            self.running = False
-            if self.process:
-                self.process.terminate()
-                self.process = None
-            raise RuntimeError(f"Failed to start worker process {self.worker_id}: {str(e)}")
+        # Thread-safe process initialization
+        with threading.Lock():
+            try:
+                self.process = managed_subprocess_popen(
+                    [sys.executable, "-u", str(worker_script), str(self.worker_id)],
+                    stdin=subprocess.PIPE,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True,
+                    bufsize=1,
+                    env={**os.environ, "PYTHONUNBUFFERED": "1"},
+                    timeout=None,  # Long-running worker process
+                    max_memory_mb=100,  # 100MB memory limit for worker
+                    tags={"hook": "worker-pool", "worker_id": self.worker_id}
+                )
+                
+                # Verify process started successfully
+                if self.process.poll() is not None:
+                    raise RuntimeError(f"Worker process {self.worker_id} failed to start")
+                
+                # Set running flag BEFORE starting threads to prevent race condition
+                self.running = True
+                
+                # Start reader threads only after confirming process is running and running flag is set
+                self.stdout_thread = threading.Thread(target=self._read_stdout, daemon=True)
+                self.stderr_thread = threading.Thread(target=self._read_stderr, daemon=True)
+                
+                self.stdout_thread.start()
+                self.stderr_thread.start()
+                
+            except Exception as e:
+                # Ensure running is False and cleanup properly
+                self.running = False
+                if self.process:
+                    try:
+                        self.process.terminate()
+                        # Wait briefly for graceful termination
+                        self.process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        self.process.kill()
+                    finally:
+                        self.process = None
+                raise RuntimeError(f"Failed to start worker process {self.worker_id}: {e!s}")
     
     def _create_worker_script(self, path: Path):
         """Create the worker script."""
@@ -174,7 +195,7 @@ if __name__ == "__main__":
                 elif self.process.poll() is not None:
                     # Process has terminated
                     break
-            except:
+            except Exception:
                 break
     
     def execute(self, request: Dict[str, Any]) -> Dict[str, Any]:
@@ -197,7 +218,7 @@ if __name__ == "__main__":
         except (BrokenPipeError, OSError) as e:
             return {
                 "success": False,
-                "error": f"Failed to send request to worker {self.worker_id}: {str(e)}",
+                "error": f"Failed to send request to worker {self.worker_id}: {e!s}",
                 "exit_code": 1
             }
         
@@ -214,10 +235,14 @@ if __name__ == "__main__":
     
     def shutdown(self):
         """Shutdown the worker process."""
+        # Set running flag to False to signal threads to stop
         self.running = False
         
-        # Give reading threads a moment to finish
-        time.sleep(0.1)
+        # Wait for reader threads to finish cleanly
+        if self.stdout_thread and self.stdout_thread.is_alive():
+            self.stdout_thread.join(timeout=2)
+        if self.stderr_thread and self.stderr_thread.is_alive():
+            self.stderr_thread.join(timeout=2)
         
         if self.process:
             try:
@@ -236,6 +261,8 @@ if __name__ == "__main__":
                     self.process.kill()
             finally:
                 self.process = None
+                self.stdout_thread = None
+                self.stderr_thread = None
 
 
 class HookExecutionPool:

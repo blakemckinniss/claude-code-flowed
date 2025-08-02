@@ -2,8 +2,9 @@
 
 import sys
 import json
+
+# Path setup handled by centralized resolver when importing this module
 from typing import List, Optional, Dict, Any
-from dataclasses import asdict
 from .drift_detector import DriftEvidence, DriftSeverity, DriftGuidanceGenerator
 
 
@@ -215,7 +216,7 @@ class ContextualGuidanceEnhancer:
         context_parts = [
             guidance_message,
             "",
-            f"📍 CURRENT CONTEXT:",
+            "📍 CURRENT CONTEXT:",
             f"  • Last Tool: {tool_name}",
             f"  • Recent Sequence: {' → '.join(recent_tools[-5:])}"
         ]

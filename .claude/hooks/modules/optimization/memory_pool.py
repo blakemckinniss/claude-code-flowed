@@ -81,7 +81,7 @@ class ObjectPool(Generic[T]):
             if isinstance(obj, Poolable):
                 obj.reset()
             
-            return cast(T, obj)
+            return cast('T', obj)
     
     def release(self, obj: T):
         """Return an object to the pool."""

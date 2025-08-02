@@ -11,39 +11,53 @@ import sqlite3
 import time
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 # Set up hook paths using centralized path resolver
 from modules.utils.path_resolver import setup_hook_paths
 setup_hook_paths()
 
+# Neural pattern integration with fallback support - avoid namespace collision
+neural_module = None
 try:
-    from modules.pre_tool.analyzers.neural_pattern_validator import NeuralPatternStorage, NeuralPattern
+    import modules.pre_tool.analyzers.neural_pattern_validator as neural_module
     _NEURAL_AVAILABLE = True
 except ImportError:
-    # Fallback if modules aren't available
-    from dataclasses import dataclass
-    
-    @dataclass
-    class NeuralPattern:
-        pattern_id: str
-        tool_name: str
-        context_hash: str
-        success_count: int
-        failure_count: int
-        confidence_score: float
-        learned_optimization: str
-        created_timestamp: float
-        last_used_timestamp: float
-        performance_metrics: Dict[str, float]
-    
-    class NeuralPatternStorage:
-        def store_pattern(self, pattern: NeuralPattern) -> bool:
-            return True  # Fallback does nothing but maintains interface
-        def get_patterns_for_tool(self, tool_name: str, min_confidence: float = 0.5):
-            return []
-    
     _NEURAL_AVAILABLE = False
+
+
+def create_neural_pattern(**kwargs) -> Any:
+    """Create a neural pattern using the available implementation."""
+    if _NEURAL_AVAILABLE and neural_module:
+        return neural_module.NeuralPattern(**kwargs)
+    else:
+        # Return a simple dict that mimics the interface
+        return {
+            'pattern_id': kwargs.get('pattern_id', ''),
+            'tool_name': kwargs.get('tool_name', ''),
+            'context_hash': kwargs.get('context_hash', ''),
+            'success_count': kwargs.get('success_count', 0),
+            'failure_count': kwargs.get('failure_count', 0),
+            'confidence_score': kwargs.get('confidence_score', 0.0),
+            'learned_optimization': kwargs.get('learned_optimization', ''),
+            'created_timestamp': kwargs.get('created_timestamp', 0.0),
+            'last_used_timestamp': kwargs.get('last_used_timestamp', 0.0),
+            'performance_metrics': kwargs.get('performance_metrics', {})
+        }
+
+
+def create_neural_storage() -> Any:
+    """Create a neural pattern storage using the available implementation."""
+    if _NEURAL_AVAILABLE and neural_module:
+        return neural_module.NeuralPatternStorage()
+    else:
+        # Return a simple fallback storage
+        class FallbackStorage:
+            def store_pattern(self, pattern: Any) -> bool:
+                return True  # Fallback does nothing but maintains interface
+            def get_patterns_for_tool(self, tool_name: str, min_confidence: float = 0.5) -> List[Any]:
+                return []
+        return FallbackStorage()
 
 
 class PerformanceMonitor:
@@ -52,7 +66,7 @@ class PerformanceMonitor:
     def __init__(self):
         self.hooks_dir = Path(__file__).parent
         self.metrics_db_path = self.hooks_dir / ".session" / "performance_metrics.db"
-        self.neural_storage = NeuralPatternStorage()
+        self.neural_storage = create_neural_storage()
         self.session_start_time = time.time()
         
         # Performance thresholds
@@ -252,10 +266,10 @@ class PerformanceMonitor:
         """Store successful performance patterns for neural learning."""
         try:
             pattern_id = f"perf_{operation_data.get('operation_type', 'unknown')}_{int(time.time())}"
-            success_factors = self._extract_success_factors(operation_data)
+            self._extract_success_factors(operation_data)
             
-            # Create NeuralPattern object with proper interface
-            pattern = NeuralPattern(
+            # Create neural pattern using factory function (handles both implementations)
+            pattern = create_neural_pattern(
                 pattern_id=pattern_id,
                 tool_name=operation_data.get("operation_type", "unknown"),
                 context_hash=f"perf_{hash(str(operation_data))}",
@@ -399,45 +413,41 @@ def main():
     try:
         monitor = PerformanceMonitor()
         
-        # Check if we're receiving operation data
+        # Read operation data from stdin
+        operation_data = {}
         if not sys.stdin.isatty():
             try:
-                input_data = json.load(sys.stdin)
-                result = monitor.record_operation(input_data)
-                print(json.dumps(result))
-            except (json.JSONDecodeError, EOFError):
-                # No input data, show trends
-                trends = monitor.analyze_performance_trends()
-                print(json.dumps(trends, indent=2))
-        else:
-            # Interactive mode - show performance trends
-            trends = monitor.analyze_performance_trends()
-            
-            print("📊 Performance Analysis - Queen ZEN's Hive Intelligence")
-            print("=" * 55)
-            print(f"Average Duration: {trends['average_duration']:.2f}s")
-            print(f"Success Rate: {trends['success_rate']:.1%}")
-            print(f"Optimization Score: {trends['optimization_score']:.2f}")
-            print(f"Bottlenecks Detected: {trends['bottleneck_count']}")
-            print()
-            
-            if trends.get("trend_analysis"):
-                print("📈 Trend Analysis:")
-                for analysis in trends["trend_analysis"]:
-                    print(f"   {analysis}")
-                print()
-            
-            if trends.get("recommendations"):
-                print("🎯 Recommendations:")
-                for rec in trends["recommendations"]:
-                    print(f"   {rec}")
-                print()
-            
-            print("🧠 Neural Pattern Learning:", "Enabled" if _NEURAL_AVAILABLE else "Disabled (fallback mode)")
-            
+                operation_data = json.loads(sys.stdin.read())
+            except json.JSONDecodeError:
+                operation_data = {"operation_type": "unknown", "success": False, "error_message": "Invalid JSON input"}
+        
+        # Record the operation
+        result = monitor.record_operation(operation_data)
+        
+        # Output results
+        print(json.dumps(result, indent=2))
+        
+        # Also analyze recent trends
+        trends = monitor.analyze_performance_trends(timeframe_hours=1)
+        if trends.get("trend_analysis"):
+            print("\n📊 Performance Trends:", file=sys.stderr)
+            for analysis in trends["trend_analysis"]:
+                print(f"  {analysis}", file=sys.stderr)
+        
+        if trends.get("recommendations"):
+            print("\n💡 Recommendations:", file=sys.stderr)
+            for rec in trends["recommendations"]:
+                print(f"  {rec}", file=sys.stderr)
+        
     except Exception as e:
-        print(f"❌ Performance monitoring error: {e}")
-        sys.exit(1)
+        error_result = {
+            "performance_recorded": False,
+            "error": str(e),
+            "optimization_score": 0.0,
+            "bottleneck_detected": True,
+            "recommendations": ["🔧 Performance monitoring encountered an error - check system resources"]
+        }
+        print(json.dumps(error_result, indent=2))
 
 
 if __name__ == "__main__":

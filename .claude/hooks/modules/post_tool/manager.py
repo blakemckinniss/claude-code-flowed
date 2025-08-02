@@ -39,9 +39,9 @@ class PostToolAnalysisConfig:
         """Load configuration from JSON file."""
         try:
             if os.path.exists(self.config_path):
-                with open(self.config_path, 'r') as f:
+                with open(self.config_path) as f:
                     return json.load(f)
-        except (json.JSONDecodeError, IOError) as e:
+        except (OSError, json.JSONDecodeError) as e:
             print(f"Warning: Could not load post-tool config: {e}")
         
         # Return default configuration

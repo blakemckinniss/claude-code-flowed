@@ -115,7 +115,7 @@ class HiveWorkflowOptimizer(HiveWorkflowValidator):
                                 context: WorkflowContextTracker) -> Optional[str]:
         """Detect specific workflow patterns."""
         
-        recent_tools = context._recent_tools + [tool_name]
+        recent_tools = [*context._recent_tools, tool_name]
         recent_inputs = str(tool_input).lower()
         
         # Check each defined pattern

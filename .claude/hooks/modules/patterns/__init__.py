@@ -7,13 +7,15 @@ from .github import GitHubAnalyzer
 from .testing import TestingAnalyzer
 from .performance import PerformanceAnalyzer
 from .swarm import SwarmAnalyzer
+from .commands import CommandPatternsAnalyzer
 
 __all__ = [
+    'CommandPatternsAnalyzer',
+    'DevelopmentAnalyzer',
+    'GitHubAnalyzer',
     'HiveOrchestrationAnalyzer',
     'MCPOrchestrationAnalyzer',
-    'DevelopmentAnalyzer',
-    'GitHubAnalyzer', 
-    'TestingAnalyzer',
     'PerformanceAnalyzer',
-    'SwarmAnalyzer'
+    'SwarmAnalyzer',
+    'TestingAnalyzer'
 ]

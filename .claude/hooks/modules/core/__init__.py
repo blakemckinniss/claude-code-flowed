@@ -4,4 +4,4 @@ from .analyzer import Analyzer, PatternMatch
 from .context_builder import ContextBuilder
 from .config import Config
 
-__all__ = ['Analyzer', 'PatternMatch', 'ContextBuilder', 'Config']
+__all__ = ['Analyzer', 'Config', 'ContextBuilder', 'PatternMatch']

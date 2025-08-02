@@ -234,7 +234,7 @@ class NativeToolOveruseAnalyzer(DriftAnalyzer):
             severity=DriftSeverity.MINOR,
             tool_sequence=self.get_recent_tools(),
             missing_tools=["mcp__zen__chat", "mcp__claude-flow__swarm_init"],
-            evidence_details=f"3 consecutive native tools - consider MCP coordination for efficiency",
+            evidence_details="3 consecutive native tools - consider MCP coordination for efficiency",
             correction_guidance="Queen ZEN's hive coordination can optimize these operations",
             priority_score=20
         )
@@ -246,7 +246,7 @@ class NativeToolOveruseAnalyzer(DriftAnalyzer):
             severity=DriftSeverity.MODERATE,
             tool_sequence=self.get_recent_tools(),
             missing_tools=["mcp__zen__thinkdeep", "mcp__claude-flow__memory_usage"],
-            evidence_details=f"5 consecutive native tools without hive coordination",
+            evidence_details="5 consecutive native tools without hive coordination",
             correction_guidance="Hive intelligence can provide better coordination and memory management",
             priority_score=40
         )

@@ -1,10 +1,25 @@
 """Post-tool analysis system for Claude Code hook integration.
 
-This modular system detects when Claude Code drifts away from the proper
-Queen ZEN → Flow Workers → Storage Workers → Execution Drones workflow
-and provides strategic guidance to restore hive coordination.
+This modular system provides two complementary approaches:
+
+1. Legacy drift detection system - Detects when Claude Code drifts away from the proper
+   Queen ZEN → Flow Workers → Storage Workers → Execution Drones workflow
+   
+2. New analyzer dispatch system - Extensible framework for tool-specific analyzers
+   with async execution support and intelligent pattern matching
 """
 
+# New analyzer dispatch system
+from .analyzer_dispatch import (
+    AnalyzerDispatcher,
+    ToolAnalyzer,
+    AnalyzerResult,
+    AnalysisResult,
+    ToolMatcher,
+    AnalyzerRegistry,
+)
+
+# Legacy drift detection system
 from .manager import PostToolAnalysisManager, PostToolAnalysisConfig, DebugAnalysisReporter
 from .core import (
     DriftSeverity,
@@ -14,15 +29,24 @@ from .core import (
     GuidanceOutputHandler
 )
 
-__version__ = "1.0.0"
+__version__ = "2.0.0"
 
 __all__ = [
-    'PostToolAnalysisManager',
-    'PostToolAnalysisConfig', 
+    # New analyzer dispatch system
+    'AnalyzerDispatcher',
+    'ToolAnalyzer', 
+    'AnalyzerResult',
+    'AnalysisResult',
+    'ToolMatcher',
+    'AnalyzerRegistry',
+    
+    # Legacy drift detection system
     'DebugAnalysisReporter',
+    'DriftEvidence',
     'DriftSeverity',
     'DriftType',
-    'DriftEvidence',
+    'GuidanceOutputHandler',
     'NonBlockingGuidanceProvider',
-    'GuidanceOutputHandler'
+    'PostToolAnalysisConfig',
+    'PostToolAnalysisManager'
 ]

@@ -1,5 +1,6 @@
 {
   "enabled_analyzers": [
+    "command_patterns",
     "hive_orchestration",
     "mcp_orchestration", 
     "swarm",
